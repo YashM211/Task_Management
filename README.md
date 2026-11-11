@@ -1,61 +1,70 @@
-# Task Management System — Secure Spring Boot REST API
+# Task Management System
 
-[![Java](https://img.shields.io/badge/Java-25-orange?logo=openjdk)](build.gradle)
-[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.0.6-6DB33F?logo=springboot&logoColor=white)](build.gradle)
-[![Spring Security](https://img.shields.io/badge/Spring%20Security-JWT-6DB33F?logo=springsecurity&logoColor=white)](src/main/java/com/example/task_management_system/config/SecurityConfig.java)
-[![Spring Data JPA](https://img.shields.io/badge/Spring%20Data-JPA-6DB33F?logo=spring&logoColor=white)](build.gradle)
-[![H2](https://img.shields.io/badge/H2-file--based-09476B)](src/main/resources/application.properties)
-[![Gradle](https://img.shields.io/badge/Gradle-9.5.1-02303A?logo=gradle&logoColor=white)](gradle/wrapper/gradle-wrapper.properties)
+A stateless REST API for managing tasks and collaboration between
+registered users. The application supports account registration,
+JWT-based authentication, task ownership and assignment, task-status
+updates, and comments.
 
-A stateless REST API for coordinating work between registered users. The
-system supports task ownership, assignment, lifecycle updates, and discussion
-through comments, backed by Spring Data JPA and protected with a Basic-to-JWT
-authentication flow.
+> **Project status:** This is an individual backend portfolio project
+> demonstrating layered application design, API contracts,
+> authentication and authorization, relational persistence, and
+> documented engineering trade-offs. It is not presented as a
+> production-ready service. Known limitations and planned improvements
+> are listed below.
 
-Built as an engineering portfolio project to demonstrate layered backend
-design, explicit API contracts, authentication and authorization boundaries,
-relational domain modeling, and honest technical trade-offs. It is a focused
-backend case study rather than a finished production service; the current
-boundary and next engineering steps are documented in
-[Engineering roadmap](#engineering-roadmap).
+## Table of contents
 
----
+-   [Features](#features)
+-   [Architecture](#architecture)
+-   [Domain model](#domain-model)
+-   [Technology stack](#technology-stack)
+-   [Getting started](#getting-started)
+-   [API reference](#api-reference)
+-   [Example workflow](#example-workflow)
+-   [Response examples](#response-examples)
+-   [Testing](#testing)
+-   [Known limitations](#known-limitations)
+-   [Roadmap](#roadmap)
+-   [License](#license)
 
-## Core capabilities
+## Features
 
-- **Account registration:** validates email and password input, normalizes
-  emails to lowercase, rejects duplicates, and stores BCrypt password hashes.
-- **Stateless authentication:** exchanges HTTP Basic credentials for an
-  RSA-signed JWT, then accepts that token as a bearer credential.
-- **Task workflow:** creates tasks, lists them in descending ID order, and
-  filters them by author and/or assignee.
-- **Task collaboration:** lets an author assign or unassign a user, while the
-  author or assignee may update task status.
-- **Comments:** authenticated users can add comments to a task and retrieve its
-  comment history.
-- **Boundary validation:** uses Jakarta Bean Validation on request records and
-  maps validation and domain failures through a central exception handler.
+-   **Account registration:** validates email and password input,
+    normalizes email addresses to lowercase, rejects duplicate accounts,
+    and stores BCrypt password hashes.
+-   **Stateless authentication:** exchanges HTTP Basic credentials for
+    an RSA-signed JWT and accepts the token as a bearer credential on
+    protected routes.
+-   **Task management:** creates tasks and lists them in descending ID
+    order, with optional author and assignee filters.
+-   **Task assignment:** allows a task's author to assign or unassign a
+    registered user.
+-   **Task lifecycle:** allows the author or assigned user to change a
+    task's status.
+-   **Comments:** allows authenticated users to add comments to tasks
+    and retrieve comment history.
+-   **Request validation:** uses Jakarta Bean Validation for request
+    payloads.
+-   **Centralized error handling:** maps validation and domain failures
+    to HTTP responses through a global exception handler.
 
 ## Architecture
 
-The application is a single Spring Boot service with a layered request path.
-Most code is grouped by feature (`auth`, `user`, and `task`), while
-cross-cutting security, configuration, and exception behavior lives in
-dedicated packages.
+The application is a single Spring Boot service organized around feature
+packages (`auth`, `user`, and `task`) with shared security,
+configuration, and exception-handling components.
 
-```mermaid
+``` mermaid
 flowchart LR
     Client["API client"] --> Security["Spring Security filter chain"]
 
     subgraph Application["Spring Boot application"]
         Security --> Controllers["REST controllers"]
-        Controllers --> DTOs["Immutable request / response records"]
+        Controllers --> DTOs["Request / response records"]
         Controllers --> Services["Application services"]
         Services --> Repositories["Spring Data repositories"]
-
-        Security --> UDS["CustomUserDetailsService"]
-        UDS --> UserRepository["UserRepository"]
-
+        Security --> UserDetails["CustomUserDetailsService"]
+        UserDetails --> UserRepository["UserRepository"]
         Security --> Decoder["JWT decoder"]
         AuthController["AuthController"] --> Encoder["JWT encoder"]
         Encoder --> RSA["Runtime RSA-2048 key pair"]
@@ -65,32 +74,23 @@ flowchart LR
     UserRepository --> H2
 ```
 
-### Request flow
+### Request lifecycle
 
-1. The Spring Security filter chain authenticates the request with HTTP Basic
-   or a bearer JWT.
-2. A controller validates the HTTP payload and combines it with the
-   authenticated principal when the operation needs caller context.
-3. The service layer performs orchestration and task ownership checks.
-4. Spring Data repositories load and persist JPA entities.
-5. Controllers return explicit response records rather than exposing entity
-   graphs directly.
-6. `GlobalExceptionHandler` translates validation and domain failures into
-   HTTP responses.
+1.  The Spring Security filter chain authenticates the request using
+    HTTP Basic credentials or a bearer JWT.
+2.  The controller validates the incoming payload and obtains caller
+    information from the authenticated principal when required.
+3.  The service layer coordinates the operation and applies task
+    ownership and assignment rules.
+4.  Spring Data repositories load and persist JPA entities.
+5.  Controllers return explicit response records rather than exposing
+    JPA entities directly.
+6.  `GlobalExceptionHandler` translates validation and domain errors
+    into HTTP responses.
 
-The task write paths make the boundary especially visible:
+### Authentication flow
 
-```text
-PostTaskBody (HTTP payload)
-    → PostTaskRequest (payload + authenticated author)
-        → TaskService
-            → Task entity
-                → PostTaskResponse (controlled HTTP response)
-```
-
-### Authentication lifecycle
-
-```mermaid
+``` mermaid
 sequenceDiagram
     actor Client
     participant Security as Spring Security
@@ -101,19 +101,19 @@ sequenceDiagram
     participant Tasks as Task API
 
     Client->>Security: POST /api/accounts
-    Security->>Users: Public registration request
-    Users->>Users: Normalize email + BCrypt password
-    Users->>DB: Persist AppUser
-    DB-->>Users: Saved AppUser
-    Users-->>Client: 200 account response
+    Security->>Users: Registration request
+    Users->>Users: Normalize email and hash password
+    Users->>DB: Persist user
+    DB-->>Users: Saved user
+    Users-->>Client: Account response
 
     Client->>Security: POST /api/auth/token (Basic credentials)
-    Security->>DB: Load user by normalized email
-    DB-->>Security: BCrypt hash + role
+    Security->>DB: Load user
+    DB-->>Security: Password hash and role
     Security->>Security: Verify password
     Security->>Auth: Authenticated principal
     Auth->>JWT: Sign claims with runtime RSA private key
-    JWT-->>Client: 200 JWT response
+    JWT-->>Client: JWT response
 
     Client->>Security: Protected request (Bearer JWT)
     Security->>JWT: Verify signature and expiration
@@ -124,17 +124,17 @@ sequenceDiagram
     Tasks-->>Client: API response
 ```
 
-The token currently expires **60 seconds** after issuance. The configuration
-also contains `jwt.expiration-minutes=60`, but that property is not yet wired
-into token generation; this mismatch is called out in the roadmap rather than
-hidden by the documentation.
+The issued token currently expires **60 seconds** after creation.
+Although `jwt.expiration-minutes=60` exists in configuration, token
+generation does not yet use that property. This discrepancy is
+documented as a known limitation.
 
 ## Domain model
 
-```mermaid
+``` mermaid
 erDiagram
     APP_USER ||--o{ TASK : authors
-    APP_USER o|--o{ TASK : "is assigned"
+    APP_USER o|--o{ TASK : assigned_to
     APP_USER ||--o{ COMMENT : writes
     TASK ||--o{ COMMENT : contains
 
@@ -158,245 +158,221 @@ erDiagram
         Long id PK
         String text
         Long task_id FK
-        Long author FK
+        Long author_id FK
     }
 ```
 
-| Entity | Responsibility | Important constraints |
-| --- | --- | --- |
-| `AppUser` | Authentication identity and task participant | Unique email, BCrypt password, default `USER` role |
-| `Task` | Unit of work owned by an author | Required title, description, author, and initial `CREATED` status; optional assignee |
-| `Comment` | User-authored discussion attached to a task | Belongs to one task and one author |
+  -----------------------------------------------------------------------
+  Entity                  Responsibility          Constraints / behavior
+  ----------------------- ----------------------- -----------------------
+  `AppUser`               Authentication identity Unique email, BCrypt
+                          and task participant    password hash, default
+                                                  `USER` role
 
-The task lifecycle accepts `CREATED`, `IN_PROGRESS`, and `COMPLETED` through
-the [`TaskStatus`](src/main/java/com/example/task_management_system/task/enums/TaskStatus.java)
-API enum. The entity currently persists that value as a string; moving the
-enum into the persistence model is a planned type-safety improvement.
+  `Task`                  Work item created by an Required title,
+                          author                  description, author,
+                                                  and initial `CREATED`
+                                                  status; optional
+                                                  assignee
 
-## Tech stack
+  `Comment`               Discussion attached to  Belongs to one task and
+                          a task                  one author
+  -----------------------------------------------------------------------
 
-| Layer | Technology |
-| --- | --- |
-| Language and build | Java 25 toolchain · Gradle 9.5.1 wrapper |
-| Application | Spring Boot 4.0.6 · Spring Web |
-| Security | Spring Security · HTTP Basic · OAuth2 Resource Server · Nimbus JWT · RSA-2048 · BCrypt |
-| API contracts | Java records · Jakarta Bean Validation |
-| Persistence | Spring Data JPA · Hibernate · file-backed H2 |
-| Error handling | `@RestControllerAdvice` · structured `ErrorResponse` record |
-| Testing | JUnit 5 · Spring Boot Test |
+Supported task statuses are `CREATED`, `IN_PROGRESS`, and `COMPLETED`.
+The API uses the `TaskStatus` enum, while the entity currently persists
+the status as a string. Persisting the enum explicitly is a planned
+type-safety improvement.
 
-## Design decisions and trade-offs
+## Technology stack
 
-### Feature-oriented organization
+  -----------------------------------------------------------------------
+  Area                                Technology
+  ----------------------------------- -----------------------------------
+  Language                            Java 25
 
-Controllers, services, repositories, and DTOs for users and tasks are
-co-located by domain instead of being spread across global technical-layer
-folders. This makes a feature easier to trace and gives it a clear extraction
-path if the codebase later becomes modular. `Comment` and its repository
-currently live in a small generic `entities` package even though the behavior
-belongs to tasks; consolidating that package is a future cleanup.
+  Framework                           Spring Boot 4.0.6, Spring Web
 
-### Explicit DTO boundaries
+  Build                               Gradle 9.5.1 wrapper
 
-The API returns Java records instead of serializing JPA entities. Task write
-operations distinguish the raw HTTP body, an internal request containing
-authenticated caller context, and the response contract. This avoids leaking
-security or servlet types into the core operation and prevents accidental
-exposure of passwords or relationship graphs. The cost is additional mapping
-code, accepted here in exchange for a controlled public contract.
+  Security                            Spring Security, HTTP Basic, OAuth2
+                                      Resource Server, Nimbus JWT,
+                                      RSA-2048, BCrypt
 
-### Basic-to-JWT authentication flow
+  API contracts                       Java records, Jakarta Bean
+                                      Validation
 
-The intended client flow uses Basic authentication to obtain a short-lived
-token and bearer authentication for subsequent requests. The server remains
-stateless, passwords are verified through BCrypt, and JWTs are signed
-asymmetrically so verification needs only the public key. Both authentication
-mechanisms are currently accepted on every protected endpoint; narrowing Basic
-authentication to the token route is a future hardening step.
+  Persistence                         Spring Data JPA, Hibernate,
+                                      file-backed H2
 
-### Business authorization in the service layer
+  Error handling                      `@RestControllerAdvice`, structured
+                                      `ErrorResponse` record
 
-Task assignment is restricted to the task author. Status changes are allowed
-for either the author or the assigned user. Keeping these checks beside the
-business operation makes the behavior testable without a web request, but the
-current use of `ResponseStatusException` couples service code to HTTP. Domain
-exceptions or method-level authorization would provide a cleaner separation as
-the rule set grows.
+  Tests                               JUnit 5, Spring Boot Test
+  -----------------------------------------------------------------------
 
-### Derived persistence queries
-
-`TaskRepository` expresses author and assignee filters through Spring Data
-method names and applies an explicit descending-ID sort. This keeps a compact
-query layer for the current use case. More complex search, pagination, and
-query composition would justify specifications or purpose-built queries.
-
-### Centralized error translation
-
-`GlobalExceptionHandler` centralizes validation failures, duplicate accounts,
-HTTP-aware service failures, malformed request bodies, and unexpected
-exceptions. Most failures use a shared response envelope containing status,
-error, details, and timestamp. Malformed bodies currently return plain text,
-so making all error paths conform to one contract remains planned work.
-
-## Project structure
-
-```text
-src/
-├── main/
-│   ├── java/com/example/task_management_system/
-│   │   ├── auth/          # JWT issuance endpoint and response contract
-│   │   ├── config/        # Security filter chain and RSA/JWT beans
-│   │   ├── dto/           # Shared error response
-│   │   ├── entities/      # Comment entity and repository
-│   │   ├── exception/     # Domain exception and global HTTP mapping
-│   │   ├── security/      # Database-backed UserDetailsService
-│   │   ├── task/          # Task API, service, model, repository, DTOs
-│   │   ├── user/          # Registration API, service, model, repository
-│   │   └── TaskManagementSystemApplication.java
-│   └── resources/
-│       ├── application.properties
-│       └── static/index.html
-└── test/
-    └── java/.../TaskManagementSystemApplicationTests.java
-```
-
-Useful entry points:
-
-- [`SecurityConfig`](src/main/java/com/example/task_management_system/config/SecurityConfig.java)
-  defines authentication mechanisms, public routes, stateless sessions, and
-  the password encoder.
-- [`AuthController`](src/main/java/com/example/task_management_system/auth/AuthController.java)
-  builds and signs JWT claims.
-- [`TaskService`](src/main/java/com/example/task_management_system/task/TaskService.java)
-  contains task orchestration and authorization rules.
-- [`GlobalExceptionHandler`](src/main/java/com/example/task_management_system/exception/GlobalExceptionHandler.java)
-  owns exception-to-response translation.
-
-## Quick start
+## Getting started
 
 ### Prerequisites
 
-- JDK 25, matching the Gradle Java toolchain declared in `build.gradle`
-- A free local port `8080`
-- No external database is required
+-   JDK 25
+-   Port `8080` available locally
 
-The repository includes the Gradle wrapper, so a separate Gradle installation
-is not needed.
+The repository includes the Gradle wrapper, so a separate Gradle
+installation is not required. No external database is needed for the
+current H2-backed configuration.
 
 ### 1. Run the tests
 
-```bash
-# macOS / Linux
+**macOS / Linux**
+
+``` bash
 ./gradlew test
 ```
 
-```powershell
-# Windows PowerShell
+**Windows PowerShell**
+
+``` powershell
 .\gradlew.bat test
 ```
 
-### 2. Start the API
+### 2. Start the application
 
-```bash
-# macOS / Linux
+**macOS / Linux**
+
+``` bash
 ./gradlew bootRun
 ```
 
-```powershell
-# Windows PowerShell
+**Windows PowerShell**
+
+``` powershell
 .\gradlew.bat bootRun
 ```
 
-The application starts at [http://localhost:8080](http://localhost:8080).
+The API starts at `http://localhost:8080`.
 
-### 3. Development database
+### 3. Inspect the development database
 
-The H2 Console is available at
-[http://localhost:8080/h2-console](http://localhost:8080/h2-console):
+The H2 Console is available at `http://localhost:8080/h2-console`.
 
-| Setting | Value |
-| --- | --- |
-| JDBC URL | `jdbc:h2:file:../tms_db` |
-| User | `sa` |
-| Password | `sa` |
+  Setting    Value
+  ---------- --------------------------
+  JDBC URL   `jdbc:h2:file:../tms_db`
+  Username   `sa`
+  Password   `sa`
 
-H2 Console access, default credentials, and
-`spring.jpa.hibernate.ddl-auto=update` are local-development choices, not a
-production database strategy.
+> **Development only:** The H2 Console, default credentials, and
+> `spring.jpa.hibernate.ddl-auto=update` are local-development settings.
+> They are not a production database configuration.
 
 ## API reference
 
-All routes except account registration and static development resources
-require authentication. The intended flow is Basic credentials for token
-issuance followed by a bearer token for task operations.
+Account registration is public. Other routes require authentication. The
+intended client flow is to obtain a JWT using HTTP Basic credentials,
+then use the bearer token for subsequent requests.
 
-| Method | Path | Authentication | Current authorization | Purpose |
-| --- | --- | --- | --- | --- |
-| `POST` | `/api/accounts` | Public | Anyone | Register an account |
-| `GET` | `/api/auth` | Basic or Bearer | Any authenticated user | Return a simple principal/authority diagnostic |
-| `POST` | `/api/auth/token` | Basic or Bearer | Any authenticated user | Issue a 60-second JWT |
-| `GET` | `/api/tasks` | Basic or Bearer | Any authenticated user | List tasks; optionally filter by `author` and `assignee` |
-| `POST` | `/api/tasks` | Basic or Bearer | Any authenticated user | Create a task owned by the caller |
-| `PUT` | `/api/tasks/{taskId}/assign` | Basic or Bearer | Task author | Assign a registered user or send `none` to unassign |
-| `PUT` | `/api/tasks/{taskId}/status` | Basic or Bearer | Task author or assignee | Set `CREATED`, `IN_PROGRESS`, or `COMPLETED` |
-| `PUT` | `/api/tasks/{taskId}/comments` | Basic or Bearer | Any authenticated user | Add a comment |
-| `GET` | `/api/tasks/{taskId}/comments` | Basic or Bearer | Any authenticated user | List comments for a task |
+  --------------------------------------------------------------------------------------
+  Method            Endpoint                         Authentication    Authorization /
+                                                                       behavior
+  ----------------- -------------------------------- ----------------- -----------------
+  `POST`            `/api/accounts`                  Public            Register an
+                                                                       account
 
-Task filters may be combined:
+  `GET`             `/api/auth`                      Basic or Bearer   Return
+                                                                       authenticated
+                                                                       principal /
+                                                                       authority details
 
-```http
+  `POST`            `/api/auth/token`                Basic or Bearer   Issue a JWT
+                                                                       (currently valid
+                                                                       for 60 seconds)
+
+  `GET`             `/api/tasks`                     Basic or Bearer   List tasks;
+                                                                       optionally filter
+                                                                       by `author`
+                                                                       and/or `assignee`
+
+  `POST`            `/api/tasks`                     Basic or Bearer   Create a task
+                                                                       owned by the
+                                                                       caller
+
+  `PUT`             `/api/tasks/{taskId}/assign`     Basic or Bearer   Assign or
+                                                                       unassign a user;
+                                                                       task author only
+
+  `PUT`             `/api/tasks/{taskId}/status`     Basic or Bearer   Set status; task
+                                                                       author or
+                                                                       assignee
+
+  `PUT`             `/api/tasks/{taskId}/comments`   Basic or Bearer   Add a comment
+
+  `GET`             `/api/tasks/{taskId}/comments`   Basic or Bearer   Retrieve comments
+                                                                       for a task
+  --------------------------------------------------------------------------------------
+
+Valid task statuses:
+
+``` text
+CREATED
+IN_PROGRESS
+COMPLETED
+```
+
+Task filters can be used individually or together:
+
+``` http
 GET /api/tasks?author=alice@example.com
 GET /api/tasks?assignee=bob@example.com
 GET /api/tasks?author=alice@example.com&assignee=bob@example.com
 ```
 
-### End-to-end workflow
+## Example workflow
 
-The following Bash-compatible example uses `curl` and `jq`. Because the
-implemented token lifetime is 60 seconds, run the protected calls promptly or
-request a fresh token.
+The following Bash example uses `curl` and `jq`. The JWT currently
+expires after 60 seconds, so complete the protected requests promptly or
+obtain a fresh token.
 
-```bash
+``` bash
 BASE_URL="http://localhost:8080"
 
-# 1. Register the task author.
+# 1. Register two users.
 curl -s -X POST "$BASE_URL/api/accounts" \
   -H "Content-Type: application/json" \
   -d '{"email":"alice@example.com","password":"password123"}' | jq
 
-# Register a second account that can be assigned to the task.
 curl -s -X POST "$BASE_URL/api/accounts" \
   -H "Content-Type: application/json" \
   -d '{"email":"bob@example.com","password":"password123"}' | jq
 
-# 2. Exchange Alice's Basic credentials for an RSA-signed JWT.
+# 2. Exchange Alice's Basic credentials for a JWT.
 TOKEN=$(curl -s -X POST "$BASE_URL/api/auth/token" \
   -u "alice@example.com:password123" | jq -r '.token')
 
-# 3. Create a task and capture its generated ID.
+# 3. Create a task and capture its ID.
 TASK_ID=$(curl -s -X POST "$BASE_URL/api/tasks" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"title":"Document the API","description":"Publish architecture and usage details"}' \
   | jq -r '.id')
 
-# List all tasks.
+# 4. List tasks.
 curl -s "$BASE_URL/api/tasks" \
   -H "Authorization: Bearer $TOKEN" | jq
 
-# 4. Assign the task to Bob. Only Alice, the author, may do this.
+# 5. Assign the task to Bob. Only the author can assign it.
 curl -s -X PUT "$BASE_URL/api/tasks/$TASK_ID/assign" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"assignee":"bob@example.com"}' | jq
 
-# 5. Move the task into progress.
+# 6. Update the task status.
 curl -s -X PUT "$BASE_URL/api/tasks/$TASK_ID/status" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"status":"IN_PROGRESS"}' | jq
 
-# 6. Add and retrieve a comment.
+# 7. Add and retrieve a comment.
 curl -s -X PUT "$BASE_URL/api/tasks/$TASK_ID/comments" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
@@ -406,24 +382,24 @@ curl -s "$BASE_URL/api/tasks/$TASK_ID/comments" \
   -H "Authorization: Bearer $TOKEN" | jq
 ```
 
-The current implementation returns `200 OK` for registration, token issuance,
-task creation, updates, and comment creation. It does not yet use `201 Created`
-for new resources.
+The current implementation returns `200 OK` for registration, token
+issuance, task creation, updates, and comment creation. It does not yet
+return `201 Created` for newly created resources.
 
-### Representative contracts
+## Response examples
 
-Successful account registration:
+### Successful account registration
 
-```json
+``` json
 {
   "id": 1,
   "email": "alice@example.com"
 }
 ```
 
-Successful task creation:
+### Successful task creation
 
-```json
+``` json
 {
   "id": "1",
   "title": "Document the API",
@@ -434,9 +410,9 @@ Successful task creation:
 }
 ```
 
-Bean Validation failure (`400 Bad Request`):
+### Validation failure --- `400 Bad Request`
 
-```json
+``` json
 {
   "status": 400,
   "error": "Validation failed",
@@ -447,9 +423,9 @@ Bean Validation failure (`400 Bad Request`):
 }
 ```
 
-Duplicate account (`409 Conflict`):
+### Duplicate account --- `409 Conflict`
 
-```json
+``` json
 {
   "status": 409,
   "error": "Username already exists",
@@ -460,9 +436,9 @@ Duplicate account (`409 Conflict`):
 }
 ```
 
-Missing task (`404 Not Found`):
+### Missing task --- `404 Not Found`
 
-```json
+``` json
 {
   "status": 404,
   "error": "Task not found",
@@ -473,9 +449,9 @@ Missing task (`404 Not Found`):
 }
 ```
 
-Assignment attempted by someone other than the author (`403 Forbidden`):
+### Unauthorized assignment --- `403 Forbidden`
 
-```json
+``` json
 {
   "status": 403,
   "error": "User is not allowed to assign this task",
@@ -486,66 +462,92 @@ Assignment attempted by someone other than the author (`403 Forbidden`):
 }
 ```
 
-An invalid task status currently produces a plain-text `400` response:
+An invalid task status currently returns a plain-text `400` response
+rather than the shared JSON error structure:
 
-```text
+``` text
 Invalid value. Accepted values are: [CREATED, IN_PROGRESS, COMPLETED]
 ```
 
 ## Testing
 
-The Gradle test task currently passes. The tracked suite contains one
-Spring Boot context smoke test:
+The current Gradle test task passes. At the time this README was
+written, the tracked test suite contains one Spring Boot context smoke
+test:
 
-```text
+``` text
 TaskManagementSystemApplicationTests.contextLoads()
 ```
 
-That test proves the application context and dependency graph can start, but it
-does **not** establish business-rule, security-contract, or endpoint coverage.
-The absence of a coverage badge and percentage in this README is deliberate.
+This verifies that the application context and dependency graph can
+start. It does **not** demonstrate business-rule, security, or endpoint
+test coverage. No test-coverage percentage is claimed.
 
-The next useful test layers are:
+Recommended next test layers:
 
-1. **Service unit tests:** registration normalization, duplicate rejection,
-   task ownership, assignment, status authorization, and missing entities.
-2. **Controller contract tests:** status codes, JSON shapes, validation errors,
-   authentication requirements, and filter parameters.
-3. **Repository tests:** author/assignee combinations, ordering, and entity
-   relationships against H2.
-4. **Security integration tests:** Basic-to-JWT issuance, signature validation,
-   expiration, and forbidden task operations.
+1.  **Service unit tests:** email normalization, duplicate-account
+    rejection, task ownership, assignment permissions, status
+    authorization, and missing entities.
+2.  **Controller tests:** response status codes, JSON contracts,
+    validation errors, authentication requirements, and filter
+    parameters.
+3.  **Repository tests:** author/assignee filter combinations, ordering,
+    and entity relationships against H2.
+4.  **Security integration tests:** Basic-to-JWT issuance, signature
+    validation, token expiration, and forbidden operations.
+
+## Known limitations
+
+The following limitations are present in the current implementation and
+are intentionally documented:
+
+-   **Ephemeral signing keys:** a new RSA-2048 key pair is generated on
+    every application start. Restarting the application invalidates
+    previously issued tokens.
+-   **JWT lifetime mismatch:** the token currently expires after 60
+    seconds; the configured `jwt.expiration-minutes=60` property is not
+    wired into token generation.
+-   **Authentication scope:** both Basic and bearer authentication are
+    accepted on protected endpoints. Basic authentication should be
+    limited to token issuance.
+-   **Authorization scope:** task and comment visibility is broader than
+    a participant-only model. Comment access is not yet restricted to
+    the task author or assignee.
+-   **Service / HTTP coupling:** task authorization rules use
+    `ResponseStatusException` in the service layer.
+-   **Persistence model:** H2 and `ddl-auto=update` are used for local
+    development. A production-oriented deployment would need a managed
+    database and versioned schema migrations.
+-   **Error response consistency:** malformed request bodies and some
+    authentication failures do not yet use the same error response
+    structure as other failures.
+-   **HTTP creation semantics:** creation endpoints currently return
+    `200 OK` rather than `201 Created`.
 
 ## Engineering roadmap
 
-This project demonstrates the implemented architecture above; it does not
-present the following work as complete:
-
-- **Persist and rotate RSA keys.** A new RSA-2048 pair is generated at every
-  application start, invalidating previously issued tokens. Load keys from a
-  keystore or secret manager and define a rotation strategy.
-- **Make JWT lifetime configuration authoritative.** Inject
-  `jwt.expiration-minutes` into token issuance and remove the current
-  hard-coded 60-second expiration.
-- **Tighten authorization boundaries.** Restrict Basic authentication to token
-  issuance, limit task/comment visibility to participants where appropriate,
-  and enforce comment access for the author or assignee.
-- **Strengthen the domain model.** Persist `TaskStatus` with
-  `@Enumerated(EnumType.STRING)`, replace unsafe `Optional.get()` use, and
-  move comment persistence into the task feature.
-- **Unify error contracts.** Return `ErrorResponse` for malformed JSON and
-  authentication failures as well as validation and service errors.
-- **Evolve persistence deliberately.** Replace H2 and `ddl-auto=update` with
-  PostgreSQL and versioned Flyway migrations for non-development environments.
-- **Publish an API contract.** Add OpenAPI documentation and examples generated
-  from the running application.
-- **Expand delivery safeguards.** Add the test layers above, a GitHub Actions
-  build, container packaging, health checks, and environment-specific
-  configuration.
+-   [ ] Persist RSA signing keys securely and define a key-rotation
+    strategy.
+-   [ ] Make JWT expiration configurable through
+    `jwt.expiration-minutes`.
+-   [ ] Restrict Basic authentication to the token endpoint.
+-   [ ] Tighten task and comment visibility rules.
+-   [ ] Replace HTTP-specific service exceptions with domain exceptions
+    or method-level authorization.
+-   [ ] Persist `TaskStatus` explicitly as a string enum.
+-   [ ] Replace unsafe `Optional.get()` usage.
+-   [ ] Move comment persistence components into the task feature
+    package.
+-   [ ] Standardize validation, malformed-body, and authentication error
+    responses.
+-   [ ] Add PostgreSQL support and Flyway migrations.
+-   [ ] Publish OpenAPI documentation and request examples.
+-   [ ] Expand automated tests and add a GitHub Actions build.
+-   [ ] Add container packaging, health checks, and environment-specific
+    configuration.
 
 ## License
 
-No license file is currently included. Treat this repository as
-source-available for portfolio review, not as an open-source distribution.
-#   T a s k _ M a n a g e m e n t  
- 
+No license file is currently included. Until a license is added, treat
+this repository as source-available for portfolio review and do not
+assume that redistribution or reuse is permitted.
